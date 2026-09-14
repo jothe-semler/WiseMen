@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#101820">
+  <title>Wise Men Sports Betting</title>
+  <meta name="description" content="Tre mænd, seks uger og ét bord i London. Bogen over alle mænds gevinster og tab frem mod Wembley.">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..900,0..100,0..1;1,9..144,300..900,0..100,0..1&family=Barlow+Condensed:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#app">Spring til indholdet</a>
+
+  <header class="masthead">
+    <a class="masthead__logo" href="#/" aria-label="Wise Men Sports Betting, til forsiden">
+      <svg viewBox="0 0 320 104" role="img" aria-hidden="true" focusable="false" fill="currentColor">
+        <g transform="translate(160 4)">
+          <path d="M-15 21 C-15 5 -8 0 0 0 C8 0 15 5 15 21 Z"/>
+          <ellipse cx="0" cy="25.5" rx="30" ry="3.2"/>
+        </g>
+        <text x="160" y="70" text-anchor="middle" font-family="Fraunces, 'Iowan Old Style', Georgia, serif" font-size="42" font-weight="600">Wise Men</text>
+        <text x="160" y="94" text-anchor="middle" font-family="'Barlow Condensed', 'Arial Narrow', sans-serif" font-size="15" font-weight="600" letter-spacing="4.5">SPORTS BETTING</text>
+      </svg>
+    </a>
+    <nav class="nav" aria-label="Hovedmenu">
+      <a class="nav__link" href="#/" data-route="home">Forsiden</a>
+      <a class="nav__link" href="#/ranglisten" data-route="ranglisten">Ranglisten</a>
+      <a class="nav__link" href="#/uger" data-route="uger">Uger</a>
+    </nav>
+  </header>
+
+  <main id="app" class="app" tabindex="-1">
+    <div class="state state--loading" role="status">
+      <p class="state__text">Bogen åbnes.</p>
+    </div>
+  </main>
+
+  <footer class="colophon">
+    <p class="colophon__line">Huset fører bogen. Afregning sker i London.</p>
+    <p class="colophon__meta"><span id="updated-at"></span> <a href="#/admin">Husets bog</a></p>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 104" width="320" height="104" role="img" aria-labelledby="wm-title" fill="currentColor" style="color:#F2EDE4">
+  <title id="wm-title">Wise Men Sports Betting</title>
+  <!-- Bowlerhatten: kuplen og skyggen i én farve, med en smal spalte som hattebånd. -->
+  <g transform="translate(160 4)">
+    <path d="M-15 21 C-15 5 -8 0 0 0 C8 0 15 5 15 21 Z"/>
+    <ellipse cx="0" cy="25.5" rx="30" ry="3.2"/>
+  </g>
+  <text x="160" y="70" text-anchor="middle" font-family="Fraunces, 'Iowan Old Style', Georgia, serif" font-size="42" font-weight="600" font-style="normal">Wise Men</text>
+  <text x="160" y="94" text-anchor="middle" font-family="'Barlow Condensed', 'Arial Narrow', sans-serif" font-size="15" font-weight="600" letter-spacing="4.5">SPORTS BETTING</text>
+</svg>
