@@ -168,6 +168,27 @@
     return 'jax';
   }
 
+  // Bettets hold: bettets eget felt, ellers kampens. Uden kamp: begge hold.
+  function betTeam(m, bet) {
+    if (bet.team) return bet.team;
+    const game = m.gamesById[bet.gameId];
+    return game ? game.focusTeam : 'BOTH';
+  }
+
+  function betGameLine(m, bet) {
+    const game = m.gamesById[bet.gameId];
+    if (game) return shortTeam(game.awayTeam) + ' hos ' + shortTeam(game.homeTeam);
+    return betTeam(m, bet) === 'BOTH' ? 'Jaguars og Texans' : 'Ingen enkelt kamp';
+  }
+
+  function isoToLocalInput(iso) {
+    // ISO med tidszone til "2026-09-13T19:00" i browserens tidszone, til datetime-local.
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
   /* ------------------------------------------------------------------------
      API
      ------------------------------------------------------------------------ */
@@ -193,7 +214,8 @@
       })).filter((g) => g.id),
       bets: list('bets').map((b) => ({
         id: str(b.id), weekNo: num(b.weekNo, 0), gameId: str(b.gameId), number: num(b.number, 0),
-        title: str(b.title), optionA: str(b.optionA), optionB: str(b.optionB), outcome: str(b.outcome).toUpperCase()
+        title: str(b.title), optionA: str(b.optionA), optionB: str(b.optionB), outcome: str(b.outcome).toUpperCase(),
+        team: str(b.team).toUpperCase()
       })).filter((b) => b.id),
       picks: list('picks').map((p) => ({
         id: str(p.id), betId: str(p.betId), playerId: str(p.playerId), side: str(p.side).toUpperCase()
@@ -429,8 +451,7 @@
   function ticketHtml(m, bet, opts) {
     const mode = (opts && opts.mode) || 'shared';
     const playerId = opts && opts.playerId;
-    const game = m.gamesById[bet.gameId];
-    const modifier = game ? teamModifier(game.focusTeam) : 'jax';
+    const modifier = teamModifier(betTeam(m, bet));
     const picks = m.picksByBet[bet.id] || [];
     const settled = !!bet.outcome;
 
@@ -474,7 +495,7 @@
     const empty = (mode === 'shared' && picks.length === 0)
       ? '<p class="ticket__empty">' + COPY.noPicks + '</p>'
       : '';
-    const gameLine = game ? esc(shortTeam(game.awayTeam) + ' hos ' + shortTeam(game.homeTeam)) + '. ' : '';
+    const gameLine = esc(betGameLine(m, bet)) + '. ';
     const stakeLine = STAKE + ' kr., odds ' + ODDS + ',0. ';
     const stateText = settled ? 'Afgjort' : COPY.open;
 
@@ -799,6 +820,18 @@
         '</select></label>'
       : '<p class="admin__note">Ingen uger i bogen endnu. Opret den første.</p>';
 
+    const focusOptions = [
+      { value: 'JAX', label: 'JAX, Jaguars teal' },
+      { value: 'HOU', label: 'HOU, Texans rød' },
+      { value: 'BOTH', label: 'BOTH, begge hold' }
+    ];
+    const teamOptions = [
+      { value: '', label: 'Som kampen' },
+      { value: 'JAX', label: 'JAX, Jaguars teal' },
+      { value: 'HOU', label: 'HOU, Texans rød' },
+      { value: 'BOTH', label: 'BOTH, begge hold, billetten får begge farver' }
+    ];
+
     const gamesList = info.games.length
       ? '<ul class="admin__list">' + info.games.map((g) =>
         '<li><div class="betrow__title">' + esc(g.awayTeam) + ' hos ' + esc(g.homeTeam) + '</div>' +
@@ -806,25 +839,57 @@
         '<form class="form--row" data-action="updateGame" data-id="' + esc(g.id) + '">' +
         '<label class="field"><span>Resultattekst</span><input type="text" name="resultText" value="' + esc(g.resultText) + '" placeholder="Fx Jaguars 27-13"></label>' +
         '<button class="button button--small" type="submit">Gem resultat</button>' +
-        '</form></li>').join('') + '</ul>'
+        '</form>' +
+        '<details class="editor"><summary>Redigér eller slet kampen</summary>' +
+        '<form data-action="updateGame" data-id="' + esc(g.id) + '">' +
+        '<div class="editor__grid">' +
+        '<label class="field"><span>Udehold</span><input type="text" name="awayTeam" required value="' + esc(g.awayTeam) + '"></label>' +
+        '<label class="field"><span>Hjemmehold</span><input type="text" name="homeTeam" required value="' + esc(g.homeTeam) + '"></label>' +
+        '<label class="field"><span>Kickoff, dansk tid</span><input type="datetime-local" name="kickoff" required value="' + esc(isoToLocalInput(g.kickoff)) + '"></label>' +
+        '<label class="field"><span>Farve</span><select name="focusTeam">' + optionsHtml(focusOptions, g.focusTeam) + '</select></label>' +
+        '</div>' +
+        '<div class="form__actions">' +
+        '<button class="button button--small" type="submit">Gem kamp</button>' +
+        '<button class="button button--small button--quiet" type="button" data-action="deleteGame" data-id="' + esc(g.id) + '" data-label="' + esc(shortTeam(g.awayTeam) + ' hos ' + shortTeam(g.homeTeam)) + '">Slet kamp</button>' +
+        '<span class="admin__note">En kamp med bets kan ikke slettes. Slet eller flyt bettene først.</span>' +
+        '</div>' +
+        '</form></details>' +
+        '</li>').join('') + '</ul>'
       : '<p class="admin__note">Ingen kampe i uge ' + weekNo + ' endnu.</p>';
 
-    const gameOptions = info.games.map((g) => ({ value: g.id, label: shortTeam(g.awayTeam) + ' hos ' + shortTeam(g.homeTeam) }));
+    const gameOptions = info.games.map((g) => ({ value: g.id, label: shortTeam(g.awayTeam) + ' hos ' + shortTeam(g.homeTeam) }))
+      .concat([{ value: '', label: 'Ingen enkelt kamp, fx begge kampe' }]);
 
     const betsList = info.bets.length
       ? info.bets.map((b) => {
-        const g = m.gamesById[b.gameId];
         const settledText = b.outcome
           ? '<span class="betrow__settled">Afgjort: ' + esc(b.outcome === 'A' ? b.optionA : b.optionB) + '.</span> Afgør igen for at ændre.'
           : COPY.open + '.';
         return '<div class="betrow">' +
           '<div class="betrow__title">Bet ' + b.number + '. ' + esc(b.title) + '</div>' +
-          '<div class="betrow__meta">' + (g ? esc(shortTeam(g.awayTeam) + ' hos ' + shortTeam(g.homeTeam)) + '. ' : '') + 'A: ' + esc(b.optionA) + '. B: ' + esc(b.optionB) + '. ' + settledText + '</div>' +
+          '<div class="betrow__meta">' + esc(betGameLine(m, b)) + '. Farve: ' + esc(betTeam(m, b)) + '. A: ' + esc(b.optionA) + '. B: ' + esc(b.optionB) + '. ' + settledText + '</div>' +
           '<form data-action="settleBet" data-id="' + esc(b.id) + '">' +
           '<label class="choice"><input type="radio" name="outcome" value="A" required' + (b.outcome === 'A' ? ' checked' : '') + '> A: ' + esc(b.optionA) + '</label>' +
           '<label class="choice"><input type="radio" name="outcome" value="B" required' + (b.outcome === 'B' ? ' checked' : '') + '> B: ' + esc(b.optionB) + '</label>' +
           '<button class="button button--small" type="submit">Afgør bet</button>' +
-          '</form></div>';
+          '</form>' +
+          '<details class="editor"><summary>Redigér eller slet bettet</summary>' +
+          '<form data-action="updateBet" data-id="' + esc(b.id) + '">' +
+          '<div class="editor__grid">' +
+          '<label class="field"><span>Nummer</span><input type="number" name="number" min="1" max="99" required value="' + b.number + '"></label>' +
+          '<label class="field"><span>Kamp</span><select name="gameId">' + optionsHtml(gameOptions, b.gameId) + '</select></label>' +
+          '<label class="field"><span>Titel</span><input type="text" name="title" required value="' + esc(b.title) + '"></label>' +
+          '<label class="field"><span>Hold</span><select name="team">' + optionsHtml(teamOptions, b.team) + '</select></label>' +
+          '<label class="field"><span>Udfald A</span><input type="text" name="optionA" required value="' + esc(b.optionA) + '"></label>' +
+          '<label class="field"><span>Udfald B</span><input type="text" name="optionB" required value="' + esc(b.optionB) + '"></label>' +
+          '</div>' +
+          '<div class="form__actions">' +
+          '<button class="button button--small" type="submit">Gem bet</button>' +
+          '<button class="button button--small button--quiet" type="button" data-action="deleteBet" data-id="' + esc(b.id) + '" data-label="Bet ' + b.number + '">Slet bet</button>' +
+          '<span class="admin__note">Sletning fjerner også alle picks på bettet.</span>' +
+          '</div>' +
+          '</form></details>' +
+          '</div>';
       }).join('')
       : '<p class="admin__note">Ingen bets i uge ' + weekNo + ' endnu.</p>';
 
@@ -896,23 +961,22 @@
         '<label class="field"><span>Hjemmehold</span><input type="text" name="homeTeam" required placeholder="Fx Jacksonville Jaguars"></label>' +
         '<label class="field"><span>Kickoff, dansk tid</span><input type="datetime-local" name="kickoff" required></label>' +
         '<label class="field"><span>Farve</span><select name="focusTeam">' +
-        optionsHtml([{ value: 'JAX', label: 'JAX, Jaguars teal' }, { value: 'HOU', label: 'HOU, Texans rød' }, { value: 'BOTH', label: 'BOTH, kun uge ' + m.finalWeek }], weekNo === m.finalWeek ? 'BOTH' : 'JAX') +
+        optionsHtml(focusOptions, weekNo === m.finalWeek ? 'BOTH' : 'JAX') +
         '</select></label>' +
         '<div class="form__actions"><button class="button" type="submit">Opret kamp</button></div>' +
         '</form></section>' +
 
         '<section class="admin__section"><h2>Bets i uge ' + weekNo + '</h2>' + betsList +
         '<h3>Opret bet</h3>' +
-        (info.games.length
-          ? '<form data-action="createBet">' +
-            '<label class="field"><span>Kamp</span><select name="gameId">' + optionsHtml(gameOptions, gameOptions[0].value) + '</select></label>' +
-            '<label class="field"><span>Titel</span><input type="text" name="title" required placeholder="Fx Jaguars vinder med 10 point eller mere"></label>' +
-            '<label class="field field--inline"><span>Udfald A</span><input type="text" name="optionA" required placeholder="Ja"></label>' +
-            '<label class="field field--inline"><span>Udfald B</span><input type="text" name="optionB" required placeholder="Nej"></label>' +
-            '<p class="admin__note">Nummeret sættes automatisk. Næste er bet ' + (info.bets.length ? Math.max.apply(null, info.bets.map((b) => b.number)) + 1 : 1) + '.</p>' +
-            '<div class="form__actions"><button class="button" type="submit">Opret bet</button></div>' +
-            '</form>'
-          : '<p class="admin__note">Opret først en kamp.</p>') +
+        '<form data-action="createBet">' +
+        '<label class="field"><span>Kamp</span><select name="gameId">' + optionsHtml(gameOptions, gameOptions[0].value) + '</select></label>' +
+        '<label class="field"><span>Titel</span><input type="text" name="title" required placeholder="Fx Jaguars vinder med 10 point eller mere"></label>' +
+        '<label class="field field--inline"><span>Udfald A</span><input type="text" name="optionA" required placeholder="Ja"></label>' +
+        '<label class="field field--inline"><span>Udfald B</span><input type="text" name="optionB" required placeholder="Nej"></label>' +
+        '<label class="field"><span>Hold</span><select name="team">' + optionsHtml(teamOptions, '') + '</select></label>' +
+        '<p class="admin__note">Nummeret sættes automatisk. Næste er bet ' + (info.bets.length ? Math.max.apply(null, info.bets.map((b) => b.number)) + 1 : 1) + '. Vælg BOTH, hvis bettet gælder både Jaguars og Texans.</p>' +
+        '<div class="form__actions"><button class="button" type="submit">Opret bet</button></div>' +
+        '</form>' +
         '</section>' +
 
         '<section class="admin__section"><h2>Picks i uge ' + weekNo + '</h2>' + pickGrid + '</section>' +
@@ -985,7 +1049,19 @@
       });
     },
     async updateGame(ctx) {
-      await postAction('updateGame', { id: ctx.form.dataset.id, resultText: str(ctx.fd.get('resultText')) });
+      // Samme handling bruges af resultat-formularen og redigeringsformularen.
+      // Kun de felter, formularen har, sendes med.
+      const payload = { id: ctx.form.dataset.id };
+      if (ctx.fd.has('resultText')) payload.resultText = str(ctx.fd.get('resultText'));
+      if (ctx.fd.has('awayTeam')) payload.awayTeam = str(ctx.fd.get('awayTeam'));
+      if (ctx.fd.has('homeTeam')) payload.homeTeam = str(ctx.fd.get('homeTeam'));
+      if (ctx.fd.has('kickoff')) payload.kickoff = localToIso(str(ctx.fd.get('kickoff')));
+      if (ctx.fd.has('focusTeam')) payload.focusTeam = str(ctx.fd.get('focusTeam')) || 'JAX';
+      await postAction('updateGame', payload);
+    },
+    async deleteGame(ctx) {
+      await postAction('deleteGame', { id: ctx.id });
+      return { message: 'Kampen er slettet.' };
     },
     async createBet(ctx) {
       await postAction('createBet', {
@@ -993,8 +1069,24 @@
         gameId: str(ctx.fd.get('gameId')),
         title: str(ctx.fd.get('title')),
         optionA: str(ctx.fd.get('optionA')),
-        optionB: str(ctx.fd.get('optionB'))
+        optionB: str(ctx.fd.get('optionB')),
+        team: str(ctx.fd.get('team'))
       });
+    },
+    async updateBet(ctx) {
+      await postAction('updateBet', {
+        id: ctx.form.dataset.id,
+        number: num(ctx.fd.get('number'), 0),
+        gameId: str(ctx.fd.get('gameId')),
+        title: str(ctx.fd.get('title')),
+        optionA: str(ctx.fd.get('optionA')),
+        optionB: str(ctx.fd.get('optionB')),
+        team: str(ctx.fd.get('team'))
+      });
+    },
+    async deleteBet(ctx) {
+      await postAction('deleteBet', { id: ctx.id });
+      return { message: 'Bettet er slettet.' };
     },
     async settleBet(ctx) {
       const outcome = str(ctx.fd.get('outcome'));
@@ -1042,19 +1134,13 @@
     }
   };
 
-  async function onSubmit(event) {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement) || !form.dataset.action) return;
-    event.preventDefault();
+  // Kører én admin-handling: skriver, viser bekræftelse, genindlæser bogen.
+  async function runAdmin(handler, ctx, buttons) {
     if (state.busy) return;
-    const handler = ADMIN[form.dataset.action];
-    if (!handler) return;
-
     state.busy = true;
-    const buttons = Array.from(form.querySelectorAll('button[type="submit"]'));
     buttons.forEach((b) => { b.disabled = true; b.setAttribute('aria-busy', 'true'); });
     try {
-      const result = await handler({ form: form, fd: new FormData(form), submitter: event.submitter || null });
+      const result = await handler(ctx);
       const reload = !(result && result.reload === false);
       toast((result && result.message) || COPY.saved);
       if (reload) await load();
@@ -1071,6 +1157,26 @@
     } finally {
       state.busy = false;
     }
+  }
+
+  function onSubmit(event) {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || !form.dataset.action) return;
+    event.preventDefault();
+    const handler = ADMIN[form.dataset.action];
+    if (!handler) return;
+    const buttons = Array.from(form.querySelectorAll('button[type="submit"]'));
+    runAdmin(handler, { form: form, fd: new FormData(form), submitter: event.submitter || null }, buttons);
+  }
+
+  function onDelete(el) {
+    const action = el.dataset.action;
+    const label = el.dataset.label || '';
+    const question = action === 'deleteBet'
+      ? 'Slet ' + label + '? Alle picks på bettet slettes også.'
+      : 'Slet kampen ' + label + '?';
+    if (!window.confirm(question)) return;
+    runAdmin(ADMIN[action], { id: el.dataset.id, form: null, fd: null, submitter: null }, [el]);
   }
 
   function onChange(event) {
@@ -1090,6 +1196,8 @@
       render();
     } else if (el.dataset.action === 'retry') {
       boot();
+    } else if (el.dataset.action === 'deleteBet' || el.dataset.action === 'deleteGame') {
+      onDelete(el);
     }
   }
 

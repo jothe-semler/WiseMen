@@ -1157,3 +1157,32 @@ img, svg { max-width: 100%; display: block; }
 @media (min-width: 900px) {
   .masthead__logo { width: 17rem; }
 }
+
+/* --------------------------------------------------------------------------
+   20. Billet i begge farver, og admin-redigering
+   -------------------------------------------------------------------------- */
+.ticket--both .ticket__option--mine .ticket__option-label::after {
+  background: linear-gradient(180deg, var(--jax) 0 50%, var(--hou) 50% 100%);
+}
+
+.editor {
+  margin-top: 0.6rem;
+  border-top: 1px dashed var(--rule-soft);
+  padding-top: 0.4rem;
+}
+.editor summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-weight: 600;
+  padding: 0.2rem 0;
+}
+.editor summary:hover { color: var(--bone); }
+.editor__grid {
+  display: grid;
+  gap: 0 1rem;
+}
+.editor .form__actions .admin__note { flex-basis: 100%; }
+
+@media (min-width: 600px) {
+  .editor__grid { grid-template-columns: 1fr 1fr; }
+}
