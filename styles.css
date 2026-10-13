@@ -1186,3 +1186,111 @@ img, svg { max-width: 100%; display: block; }
 @media (min-width: 600px) {
   .editor__grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* --------------------------------------------------------------------------
+   21. Finalen: mærker, fritekst-billetter, oraklet og admin-hjælp
+   -------------------------------------------------------------------------- */
+.ticket__mark {
+  display: inline-block;
+  margin: 0 0 0.45rem;
+  padding: 0.1rem 0.45rem;
+  font-family: var(--cond);
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  background: var(--gold);
+  color: var(--night);
+  border-radius: 2px;
+}
+.betrow__mark {
+  font-size: 0.85rem;
+  padding: 0 0.4rem;
+  background: var(--gold);
+  color: var(--night);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.ticket__answers {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--paper-rule);
+  padding-top: 0.3rem;
+}
+.ticket__answer {
+  position: relative;
+  display: block;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--paper-rule);
+}
+.ticket__answer:last-child { border-bottom: 0; }
+.ticket__answer--won,
+.ticket__answer--lost { padding-right: 7rem; min-height: 2.6rem; }
+.ticket__answer-name { display: block; font-size: var(--t-1); font-weight: 600; color: var(--paper-ink-2); overflow-wrap: anywhere; }
+.ticket__answer-text { display: block; font-size: var(--t1); font-weight: 700; line-height: 1.15; margin-top: 0.1rem; overflow-wrap: anywhere; }
+.ticket__answer--lost .ticket__answer-text { color: var(--paper-ink-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+.ticket__answer .stamp { right: 0.1rem; bottom: 0.3rem; }
+.ticket__textbody .ticket__empty {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--paper-rule);
+  padding-top: 0.7rem;
+}
+.ticket__verdict {
+  margin-top: 0.6rem;
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--paper-ink-2);
+}
+
+.wild__guesses {
+  grid-column: 1 / -1;
+  font-family: var(--cond);
+  font-size: var(--t0);
+}
+.wild__guesses li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.wild__guesses li:last-child { border-bottom: 0; }
+.wild__guess-name { color: var(--ink-2); }
+.wild__guess-text { text-align: right; white-space: nowrap; }
+.wild__guesses li.is-winner,
+.wild__guesses li.is-winner .wild__guess-name { color: var(--gold); font-weight: 700; }
+.wild__verdict {
+  grid-column: 1 / -1;
+  font-family: var(--cond);
+  font-weight: 700;
+  font-size: var(--t0);
+}
+.wild--decided .wild__state { color: var(--night); background: var(--gold); border-color: var(--gold); }
+
+.textsettle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: end;
+  margin-top: 0.25rem;
+}
+.textsettle .field { margin-top: 0; }
+.textsettle .field input { min-width: 12rem; }
+.textsettle .admin__note { flex-basis: 100%; margin-top: 0.25rem; }
+
+.suggest { margin-top: 0.5rem; }
+.suggest table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 1rem;
+  margin: 0.5rem 0;
+}
+.suggest th,
+.suggest td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.3rem 0.5rem 0.3rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.suggest th { font-weight: 600; color: var(--ink-2); }
+.suggest tr.is-best td { color: var(--gold); }

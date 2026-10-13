@@ -9,9 +9,12 @@
   /* ------------------------------------------------------------------------
      Konstanter og ordbog
      ------------------------------------------------------------------------ */
-  const STAKE = 20;                 // kr. pr. bet
-  const ODDS = 2;                   // fast odds
-  const NET_WIN = STAKE * (ODDS - 1); // +20 netto ved sejr, -20 ved nederlag
+  const STAKE = 20;                 // kr. pr. bet, standard
+  const ODDS = 2;                   // fast odds, standard
+  const DEFAULT_WIN = STAKE * (ODDS - 1);  // +20 netto ved sejr, når bettet ikke siger andet
+  const DEFAULT_LOSS = STAKE;              // 20 kr. tabt ved nederlag, når bettet ikke siger andet
+  const FETCH_TIMEOUT_MS = 45000;
+  const WRITE_TIMEOUT_MS = 90000;
   const DEFAULT_FINAL_WEEK = 6;
   const DEFAULT_KICKOFF = '2026-10-18T15:30:00+02:00';
   const TOKEN_KEY = 'wisemen.adminToken';
@@ -30,7 +33,13 @@
     miss: 'Ramte forbi',
     final: 'Finalen',
     settlement: 'Afregningen',
-    countdown: 'Dage til Wembley'
+    countdown: 'Dage til Wembley',
+    decided: 'Afgjort',
+    bonus: 'Bonus',
+    doubleUp: 'Huset giver dobbelt op',
+    noAnswer: 'Intet rigtigt svar',
+    writing: 'Skriver i bogen ...',
+    timeout: 'Bogen svarede ikke i tide. Tjek Sheetet, før du prøver igen, så intet skrives to gange.'
   };
 
   const CONFIG = window.WISE_CONFIG || {};
@@ -189,6 +198,94 @@
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  // Beløb pr. bet. Tomme kolonner i Sheetet betyder standard: +20 ved sejr, 20 tabt ved nederlag.
+  function betWin(bet) {
+    return bet.winAmount > 0 ? bet.winAmount : DEFAULT_WIN;
+  }
+
+  function betLoss(bet) {
+    return bet.lossAmount > 0 ? bet.lossAmount : DEFAULT_LOSS;
+  }
+
+  // Svar sammenlignes uden hensyn til store og små bogstaver og overflødige mellemrum.
+  function normalizeAnswer(text) {
+    return str(text).toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function roundsWord(n) {
+    return n === 1 ? '1 runde' : n + ' runder';
+  }
+
+  // Et wild bet er afgjort ved udfald, eller for en konkurrence ved vinder og runder.
+  function wildSettled(wild) {
+    if (!wild) return false;
+    if (wild.type === 'contest') return !!wild.winnerId && wild.houseRounds > 0;
+    return !!wild.outcome;
+  }
+
+  function stakeText(bet) {
+    const win = betWin(bet);
+    const loss = betLoss(bet);
+    if (bet.type === 'text') return 'Rigtigt svar giver +' + win + ' kr., forkert koster ' + loss + ' kr.';
+    if (win === DEFAULT_WIN && loss === DEFAULT_LOSS) return STAKE + ' kr., odds ' + ODDS + ',0.';
+    return 'Sejr giver +' + win + ' kr., nederlag koster ' + loss + ' kr.';
+  }
+
+  function ticketMark(bet) {
+    if (bet.type === 'text') return COPY.bonus;
+    const win = betWin(bet);
+    if (win > DEFAULT_WIN) return win === DEFAULT_WIN * 2 ? COPY.doubleUp : 'Huset giver ' + win + ' kr.';
+    return '';
+  }
+
+  // Tolker et resultat som "Jaguars 24-20 Texans" til tal for hvert hold.
+  // Nævnes kun ét hold, får det det første tal. Nævnes ingen, regnes Jaguars først.
+  function parseScore(text) {
+    const s = str(text);
+    const m = s.match(/(\d+)\s*[-:]\s*(\d+)/);
+    if (!m) return null;
+    const first = Number(m[1]);
+    const second = Number(m[2]);
+    const lower = s.toLowerCase();
+    const jaxIdx = lower.search(/jag|jax|jacksonville/);
+    const houIdx = lower.search(/tex|hou/);
+    let jaxFirst = true;
+    if (jaxIdx >= 0 && houIdx >= 0) jaxFirst = jaxIdx < houIdx;
+    else if (houIdx >= 0) jaxFirst = false;
+    return jaxFirst ? { jax: first, hou: second } : { jax: second, hou: first };
+  }
+
+  // Hjælp til huset: afstand pr. bud og forslag til vinder. Huset bekræfter selv.
+  function suggestWinner(m, weekNo, finalText) {
+    const actual = parseScore(finalText);
+    if (!actual) return null;
+    const sign = (x) => (x > 0 ? 1 : (x < 0 ? -1 : 0));
+    const rows = (m.wildPicksByWeek[weekNo] || []).map((wp) => {
+      const player = m.playersById[wp.playerId];
+      const parsed = parseScore(wp.guess);
+      if (!player) return null;
+      if (!parsed) return { player: player, guess: wp.guess, parsed: null };
+      return {
+        player: player,
+        guess: wp.guess,
+        parsed: parsed,
+        distance: Math.abs(parsed.jax - actual.jax) + Math.abs(parsed.hou - actual.hou),
+        winnerRight: sign(parsed.jax - parsed.hou) === sign(actual.jax - actual.hou),
+        totalDiff: Math.abs((parsed.jax + parsed.hou) - (actual.jax + actual.hou))
+      };
+    }).filter(Boolean);
+    const ranked = rows.filter((r) => r.parsed).sort((a, b) =>
+      (a.distance - b.distance) ||
+      ((b.winnerRight ? 1 : 0) - (a.winnerRight ? 1 : 0)) ||
+      (a.totalDiff - b.totalDiff) ||
+      a.player.name.localeCompare(b.player.name, 'da'));
+    const best = ranked[0] || null;
+    const second = ranked[1] || null;
+    const tie = !!(best && second && second.distance === best.distance &&
+      second.winnerRight === best.winnerRight && second.totalDiff === best.totalDiff);
+    return { actual: actual, rows: rows, ranked: ranked, best: best, tie: tie, houseRounds: best && best.distance <= 1 ? 2 : 1 };
+  }
+
   /* ------------------------------------------------------------------------
      API
      ------------------------------------------------------------------------ */
@@ -215,18 +312,39 @@
       bets: list('bets').map((b) => ({
         id: str(b.id), weekNo: num(b.weekNo, 0), gameId: str(b.gameId), number: num(b.number, 0),
         title: str(b.title), optionA: str(b.optionA), optionB: str(b.optionB), outcome: str(b.outcome).toUpperCase(),
-        team: str(b.team).toUpperCase()
+        team: str(b.team).toUpperCase(),
+        winAmount: amount(b.winAmount), lossAmount: amount(b.lossAmount),
+        type: str(b.type).toLowerCase() === 'text' ? 'text' : 'ab',
+        answer: str(b.answer)
       })).filter((b) => b.id),
       picks: list('picks').map((p) => ({
-        id: str(p.id), betId: str(p.betId), playerId: str(p.playerId), side: str(p.side).toUpperCase()
+        id: str(p.id), betId: str(p.betId), playerId: str(p.playerId), side: str(p.side)
       })).filter((p) => p.betId && p.playerId),
       wildBets: list('wildBets').map((w) => ({
-        weekNo: num(w.weekNo, 0), title: str(w.title), description: str(w.description), outcome: str(w.outcome).toLowerCase()
+        weekNo: num(w.weekNo, 0), title: str(w.title), description: str(w.description), outcome: str(w.outcome).toLowerCase(),
+        type: str(w.type).toLowerCase() === 'contest' ? 'contest' : 'standard',
+        winnerId: str(w.winnerId), houseRounds: amount(w.houseRounds)
       })).filter((w) => w.weekNo > 0),
       wildPicks: list('wildPicks').map((w) => ({
-        weekNo: num(w.weekNo, 0), playerId: str(w.playerId)
+        weekNo: num(w.weekNo, 0), playerId: str(w.playerId), guess: str(w.guess)
       })).filter((w) => w.weekNo > 0 && w.playerId)
     };
+  }
+
+  // Valgfrit beløb: tom eller ugyldig celle giver 0, som betyder "standard".
+  function amount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function fetchWithTimeout(url, options, ms) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), ms) : null;
+    const opts = Object.assign({}, options, controller ? { signal: controller.signal } : {});
+    return fetch(url, opts).catch((err) => {
+      if (err && err.name === 'AbortError') throw new Error(COPY.timeout);
+      throw err;
+    }).finally(() => { if (timer) clearTimeout(timer); });
   }
 
   async function fetchData() {
@@ -236,7 +354,7 @@
       throw err;
     }
     const url = API_URL + (API_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
-    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    const res = await fetchWithTimeout(url, { method: 'GET', redirect: 'follow' }, FETCH_TIMEOUT_MS);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const json = await res.json();
     if (json && json.ok === false) throw new Error(json.error || 'Ukendt fejl');
@@ -245,12 +363,12 @@
 
   async function postAction(action, payload) {
     const token = sessionStorage.getItem(TOKEN_KEY) || '';
-    const res = await fetch(API_URL, {
+    const res = await fetchWithTimeout(API_URL, {
       method: 'POST',
       redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ token: token, action: action, payload: payload || {} })
-    });
+    }, WRITE_TIMEOUT_MS);
     let json = null;
     try { json = await res.json(); } catch (e) { json = null; }
     if (!json || json.ok !== true) {
@@ -304,13 +422,26 @@
     const betsById = {};
     bets.forEach((b) => { betsById[b.id] = b; });
 
+    // Et pick er åbent, indtil bettet er afgjort. For "ab"-bets vinder siden, der
+    // matcher outcome. For fritekst-bets vinder svaret, der matcher answer, og
+    // ved "intet rigtigt svar" taber alle, der har svaret.
     const picks = data.picks
-      .filter((p) => betsById[p.betId] && playersById[p.playerId] && (p.side === 'A' || p.side === 'B'))
       .map((p) => {
         const bet = betsById[p.betId];
-        const result = !bet.outcome ? 'open' : (bet.outcome === p.side ? 'won' : 'lost');
-        return { id: p.id, betId: p.betId, playerId: p.playerId, side: p.side, bet: bet, result: result };
-      });
+        if (!bet || !playersById[p.playerId]) return null;
+        const side = bet.type === 'text' ? p.side : p.side.toUpperCase();
+        if (bet.type === 'text' ? !side : (side !== 'A' && side !== 'B')) return null;
+        let result = 'open';
+        if (bet.outcome) {
+          if (bet.type === 'text') {
+            result = bet.outcome === 'ANSWER' && normalizeAnswer(side) === normalizeAnswer(bet.answer) ? 'won' : 'lost';
+          } else {
+            result = bet.outcome === side ? 'won' : 'lost';
+          }
+        }
+        return { id: p.id, betId: p.betId, playerId: p.playerId, side: side, bet: bet, result: result };
+      })
+      .filter(Boolean);
     const picksByBet = groupBy(picks, 'betId');
     const picksByPlayer = groupBy(picks, 'playerId');
 
@@ -335,21 +466,32 @@
         for (let i = settled.length - 1; i >= 0 && settled[i].result === last; i -= 1) count += 1;
         streak = { kind: last, count: count };
       }
+      // Øl-regnskabet. Standard: ramte giver en vundet runde, ramte forbi en tabt.
+      // Konkurrence: ingen deltager taber, vinderen får husets runder.
       const beer = { owed: 0, won: 0 };
       Object.keys(wildByWeek).forEach((weekNo) => {
         const wild = wildByWeek[weekNo];
         const participants = wildPicksByWeek[weekNo] || [];
+        if (wild.type === 'contest') {
+          if (wildSettled(wild) && wild.winnerId === p.id) beer.won += wild.houseRounds;
+          return;
+        }
         if (!participants.some((x) => x.playerId === p.id)) return;
         if (wild.outcome === 'hit') beer.won += 1;
         else if (wild.outcome === 'miss') beer.owed += 1;
       });
+      const formue = mine.reduce((sum, x) => {
+        if (x.result === 'won') return sum + betWin(x.bet);
+        if (x.result === 'lost') return sum - betLoss(x.bet);
+        return sum;
+      }, 0);
       stats[p.id] = {
         player: p,
         won: won,
         lost: lost,
         open: open,
         total: mine.length,
-        formue: (won - lost) * NET_WIN,
+        formue: formue,
         accuracy: (won + lost) ? won / (won + lost) : null,
         streak: streak,
         beer: beer,
@@ -361,6 +503,10 @@
     Object.keys(wildByWeek).forEach((weekNo) => {
       const wild = wildByWeek[weekNo];
       const participants = wildPicksByWeek[weekNo] || [];
+      if (wild.type === 'contest') {
+        if (wildSettled(wild)) houseRounds += wild.houseRounds;
+        return;
+      }
       if (wild.outcome === 'hit' && participants.length > 0) houseRounds += 1;
     });
     const house = {
@@ -380,7 +526,7 @@
     const finalBets = bets.filter((b) => b.weekNo === finalWeek);
     const finalWild = wildByWeek[finalWeek];
     const settlementReady = !!weeksByNo[finalWeek] && finalBets.length > 0 &&
-      finalBets.every((b) => b.outcome) && (!finalWild || !!finalWild.outcome);
+      finalBets.every((b) => b.outcome) && (!finalWild || wildSettled(finalWild));
 
     return {
       settings: data.settings,
@@ -435,6 +581,7 @@
 
   function wildStateText(wild) {
     if (!wild) return '';
+    if (wild.type === 'contest') return wildSettled(wild) ? COPY.decided : COPY.open;
     if (wild.outcome === 'hit') return COPY.hit;
     if (wild.outcome === 'miss') return COPY.miss;
     return COPY.open;
@@ -453,6 +600,53 @@
     const playerId = opts && opts.playerId;
     const modifier = teamModifier(betTeam(m, bet));
     const picks = m.picksByBet[bet.id] || [];
+    const settled = !!bet.outcome;
+    const mark = ticketMark(bet);
+    const body = bet.type === 'text'
+      ? ticketAnswersHtml(m, bet, picks, mode, playerId)
+      : ticketOptionsHtml(m, bet, picks, mode, playerId);
+
+    return '<article class="ticket ticket--' + modifier + (bet.type === 'text' ? ' ticket--text' : '') + '" aria-label="Bet ' + bet.number + ', ' + esc(bet.title) + '">' +
+      '<div class="ticket__stub"><span class="ticket__no">Bet ' + bet.number + '</span></div>' +
+      '<div class="ticket__body">' +
+      (mark ? '<span class="ticket__mark">' + esc(mark) + '</span>' : '') +
+      '<h4 class="ticket__title">' + esc(bet.title) + '</h4>' +
+      '<p class="ticket__game">' + esc(betGameLine(m, bet)) + '. ' + esc(stakeText(bet)) + ' ' + (settled ? COPY.decided : COPY.open) + '.</p>' +
+      body +
+      '</div>' +
+      '</article>';
+  }
+
+  // Fritekst-bettet: hver mands svar på en linje, og efter afgørelsen det rigtige svar.
+  function ticketAnswersHtml(m, bet, picks, mode, playerId) {
+    const settled = !!bet.outcome;
+    const shown = mode === 'personal' ? picks.filter((p) => p.playerId === playerId) : picks;
+    const rows = shown.map((p) => {
+      const player = m.playersById[p.playerId];
+      let cls = 'ticket__answer';
+      let stamp = '';
+      if (mode === 'personal') cls += ' ticket__answer--mine';
+      if (settled) {
+        const won = p.result === 'won';
+        cls += won ? ' ticket__answer--won' : ' ticket__answer--lost';
+        stamp = stampHtml(won);
+      }
+      return '<li class="' + cls + '">' +
+        '<span class="ticket__answer-name">' + esc(displayName(player)) + '</span>' +
+        '<span class="ticket__answer-text">' + esc(p.side) + '</span>' +
+        stamp + '</li>';
+    }).join('');
+    const list = rows
+      ? '<ul class="ticket__answers">' + rows + '</ul>'
+      : (mode === 'shared' ? '<p class="ticket__empty">' + COPY.noPicks + '</p>' : '');
+    const verdict = settled
+      ? '<p class="ticket__verdict">' + (bet.outcome === 'NONE' ? COPY.noAnswer + '.' : 'Rigtigt svar: ' + esc(bet.answer) + '.') + '</p>'
+      : '';
+    return '<div class="ticket__textbody">' + list + verdict + '</div>';
+  }
+
+  // Bettet med to udfald: begge udfald side om side med mændenes valg.
+  function ticketOptionsHtml(m, bet, picks, mode, playerId) {
     const settled = !!bet.outcome;
 
     const sides = ['A', 'B'].map((side) => {
@@ -495,18 +689,7 @@
     const empty = (mode === 'shared' && picks.length === 0)
       ? '<p class="ticket__empty">' + COPY.noPicks + '</p>'
       : '';
-    const gameLine = esc(betGameLine(m, bet)) + '. ';
-    const stakeLine = STAKE + ' kr., odds ' + ODDS + ',0. ';
-    const stateText = settled ? 'Afgjort' : COPY.open;
-
-    return '<article class="ticket ticket--' + modifier + '" aria-label="Bet ' + bet.number + ', ' + esc(bet.title) + '">' +
-      '<div class="ticket__stub"><span class="ticket__no">Bet ' + bet.number + '</span></div>' +
-      '<div class="ticket__body">' +
-      '<h4 class="ticket__title">' + esc(bet.title) + '</h4>' +
-      '<p class="ticket__game">' + gameLine + stakeLine + stateText + '.</p>' +
-      '<div class="ticket__options">' + sides + empty + '</div>' +
-      '</div>' +
-      '</article>';
+    return '<div class="ticket__options">' + sides + empty + '</div>';
   }
 
   function gamePendingText(game) {
@@ -543,18 +726,39 @@
       '</svg>';
   }
 
-  function wildHtml(info) {
+  function wildHtml(m, info) {
     const wild = info.wild;
     if (!wild) return '';
+    const head = '<div class="wild__head"><h4 class="wild__title">' + esc(wild.title) + '</h4><span class="wild__state">' + wildStateText(wild) + '</span></div>' +
+      (wild.description ? '<p class="wild__desc">' + esc(wild.description) + '</p>' : '');
+
+    // Konkurrencen: alle bud, og efter afgørelsen vinderen og husets runder.
+    if (wild.type === 'contest') {
+      const settled = wildSettled(wild);
+      const entries = (m.wildPicksByWeek[info.weekNo] || [])
+        .map((wp) => ({ player: m.playersById[wp.playerId], guess: wp.guess }))
+        .filter((e) => e.player);
+      const list = entries.length
+        ? '<ul class="wild__guesses">' + entries.map((e) =>
+          '<li' + (settled && e.player.id === wild.winnerId ? ' class="is-winner"' : '') + '>' +
+          '<span class="wild__guess-name">' + esc(displayName(e.player)) + '</span>' +
+          '<span class="wild__guess-text">' + esc(e.guess || 'Intet bud') + '</span></li>').join('') + '</ul>'
+        : '<p class="wild__people"><span>Ingen har givet et bud.</span></p>';
+      const winner = settled ? m.playersById[wild.winnerId] : null;
+      const verdict = settled
+        ? '<p class="wild__verdict">Vinder: ' + esc(winner ? displayName(winner) : wild.winnerId) + '. Huset giver ' + roundsWord(wild.houseRounds) + '.</p>'
+        : '<p class="wild__people"><span>Den, der kommer tættest på, vinder en runde. Inden for ét point i alt giver huset to. Ingen kan tabe.</span></p>';
+      return '<article class="wild wild--contest' + (settled ? ' wild--decided' : ' wild--open') + '">' +
+        goalpostsSvg() + head + list + verdict + '</article>';
+    }
+
     const modifier = wild.outcome === 'hit' ? 'wild--hit' : (wild.outcome === 'miss' ? 'wild--miss' : 'wild--open');
     const names = info.participants.map(displayName);
     const people = names.length
       ? '<span>Deltagere:</span> ' + esc(names.join(', ')) + '.'
       : '<span>Ingen deltager.</span>';
     return '<article class="wild ' + modifier + '">' +
-      goalpostsSvg() +
-      '<div class="wild__head"><h4 class="wild__title">' + esc(wild.title) + '</h4><span class="wild__state">' + wildStateText(wild) + '</span></div>' +
-      (wild.description ? '<p class="wild__desc">' + esc(wild.description) + '</p>' : '') +
+      goalpostsSvg() + head +
       '<p class="wild__people">' + people + '</p>' +
       '</article>';
   }
@@ -582,7 +786,7 @@
           : '<p class="empty">Ingen bets i bogen endnu.</p>') +
         '</div>';
       const wild = info.wild
-        ? '<div class="chapter__part"><span class="kicker">Ugens wild bet</span>' + wildHtml(info) + '</div>'
+        ? '<div class="chapter__part"><span class="kicker">Ugens wild bet</span>' + wildHtml(m, info) + '</div>'
         : '';
       const narrative = '<div class="chapter__part"><span class="kicker">Ugens beretning</span>' + narrativeHtml(info.week) + '</div>';
       body = games + tickets + wild + narrative;
@@ -862,17 +1066,28 @@
 
     const betsList = info.bets.length
       ? info.bets.map((b) => {
-        const settledText = b.outcome
-          ? '<span class="betrow__settled">Afgjort: ' + esc(b.outcome === 'A' ? b.optionA : b.optionB) + '.</span> Afgør igen for at ændre.'
-          : COPY.open + '.';
-        return '<div class="betrow">' +
-          '<div class="betrow__title">Bet ' + b.number + '. ' + esc(b.title) + '</div>' +
-          '<div class="betrow__meta">' + esc(betGameLine(m, b)) + '. Farve: ' + esc(betTeam(m, b)) + '. A: ' + esc(b.optionA) + '. B: ' + esc(b.optionB) + '. ' + settledText + '</div>' +
+        const isText = b.type === 'text';
+        let settledText = COPY.open + '.';
+        if (b.outcome && isText) {
+          settledText = '<span class="betrow__settled">Afgjort: ' + (b.outcome === 'NONE' ? 'intet rigtigt svar' : esc(b.answer)) + '.</span> Afgør igen for at ændre.';
+        } else if (b.outcome) {
+          settledText = '<span class="betrow__settled">Afgjort: ' + esc(b.outcome === 'A' ? b.optionA : b.optionB) + '.</span> Afgør igen for at ændre.';
+        }
+        const optionsText = isText ? 'Fritekst. ' : 'A: ' + esc(b.optionA) + '. B: ' + esc(b.optionB) + '. ';
+        const settleForm = isText ? textSettleFormHtml(m, b) :
           '<form data-action="settleBet" data-id="' + esc(b.id) + '">' +
           '<label class="choice"><input type="radio" name="outcome" value="A" required' + (b.outcome === 'A' ? ' checked' : '') + '> A: ' + esc(b.optionA) + '</label>' +
           '<label class="choice"><input type="radio" name="outcome" value="B" required' + (b.outcome === 'B' ? ' checked' : '') + '> B: ' + esc(b.optionB) + '</label>' +
           '<button class="button button--small" type="submit">Afgør bet</button>' +
-          '</form>' +
+          '</form>';
+        const optionFields = isText
+          ? '<p class="admin__note">Fritekst-bet. Mændenes svar står under Picks.</p>'
+          : '<label class="field"><span>Udfald A</span><input type="text" name="optionA" required value="' + esc(b.optionA) + '"></label>' +
+            '<label class="field"><span>Udfald B</span><input type="text" name="optionB" required value="' + esc(b.optionB) + '"></label>';
+        return '<div class="betrow">' +
+          '<div class="betrow__title">Bet ' + b.number + '. ' + esc(b.title) + (ticketMark(b) ? ' <span class="betrow__mark">' + esc(ticketMark(b)) + '</span>' : '') + '</div>' +
+          '<div class="betrow__meta">' + esc(betGameLine(m, b)) + '. Farve: ' + esc(betTeam(m, b)) + '. ' + optionsText + esc(stakeText(b)) + ' ' + settledText + '</div>' +
+          settleForm +
           '<details class="editor"><summary>Redigér eller slet bettet</summary>' +
           '<form data-action="updateBet" data-id="' + esc(b.id) + '">' +
           '<div class="editor__grid">' +
@@ -880,8 +1095,8 @@
           '<label class="field"><span>Kamp</span><select name="gameId">' + optionsHtml(gameOptions, b.gameId) + '</select></label>' +
           '<label class="field"><span>Titel</span><input type="text" name="title" required value="' + esc(b.title) + '"></label>' +
           '<label class="field"><span>Hold</span><select name="team">' + optionsHtml(teamOptions, b.team) + '</select></label>' +
-          '<label class="field"><span>Udfald A</span><input type="text" name="optionA" required value="' + esc(b.optionA) + '"></label>' +
-          '<label class="field"><span>Udfald B</span><input type="text" name="optionB" required value="' + esc(b.optionB) + '"></label>' +
+          optionFields +
+          '<label class="field"><span>Gevinst ved sejr (kr.)</span><input type="number" name="winAmount" min="1" max="1000" required value="' + betWin(b) + '"></label>' +
           '</div>' +
           '<div class="form__actions">' +
           '<button class="button button--small" type="submit">Gem bet</button>' +
@@ -896,11 +1111,16 @@
     const pickGrid = info.bets.length
       ? '<form data-action="setPicks">' +
         '<div class="grid-wrap"><table class="pickgrid">' +
-        '<thead><tr><th>Mand</th>' + info.bets.map((b) => '<th>Bet ' + b.number + '<small>' + esc(b.title) + '</small></th>').join('') + '</tr></thead>' +
+        '<thead><tr><th>Mand</th>' + info.bets.map((b) => '<th>Bet ' + b.number + '<small>' + esc(b.title) + (b.type === 'text' ? ' (fritekst)' : '') + '</small></th>').join('') + '</tr></thead>' +
         '<tbody>' + m.players.map((p) =>
           '<tr><td>' + esc(displayName(p)) + '</td>' + info.bets.map((b) => {
             const current = (m.picksByBet[b.id] || []).find((x) => x.playerId === p.id);
-            return '<td><select name="pick:' + esc(b.id) + ':' + esc(p.id) + '" aria-label="' + esc(displayName(p)) + ', bet ' + b.number + '">' +
+            const name = 'pick:' + esc(b.id) + ':' + esc(p.id);
+            const label = esc(displayName(p)) + ', bet ' + b.number;
+            if (b.type === 'text') {
+              return '<td><input type="text" name="' + name + '" aria-label="' + label + '" placeholder="Intet" maxlength="80" value="' + esc(current ? current.side : '') + '"></td>';
+            }
+            return '<td><select name="' + name + '" aria-label="' + label + '">' +
               optionsHtml([
                 { value: '', label: 'Intet' },
                 { value: 'A', label: 'A: ' + b.optionA },
@@ -909,27 +1129,63 @@
               '</select></td>';
           }).join('') + '</tr>').join('') +
         '</tbody></table></div>' +
-        '<div class="form__actions"><button class="button" type="submit">Gem picks</button><span class="admin__note">Kun bets med ændringer skrives.</span></div>' +
+        '<div class="form__actions"><button class="button" type="submit">Gem picks</button><span class="admin__note">Kun bets med ændringer skrives. På fritekst-bets betyder et tomt felt ingen pick.</span></div>' +
         '</form>'
       : '<p class="admin__note">Opret bets først.</p>';
 
     const wild = info.wild;
+    const wildType = wild ? wild.type : 'standard';
+    const guessOf = (p) => { const wp = (m.wildPicksByWeek[weekNo] || []).find((x) => x.playerId === p.id); return wp ? wp.guess : ''; };
     const wildForm = '<form data-action="setWildBet">' +
       '<label class="field"><span>Titel</span><input type="text" name="title" required value="' + esc(wild ? wild.title : '') + '"></label>' +
       '<label class="field"><span>Beskrivelse</span><textarea name="description">' + esc(wild ? wild.description : '') + '</textarea></label>' +
-      '<div class="field"><span>Deltagere</span>' + m.players.map((p) =>
+      '<label class="field"><span>Type</span><select name="type" data-toggle="wildtype">' +
+      optionsHtml([
+        { value: 'standard', label: 'Standard, ramte eller ramte forbi' },
+        { value: 'contest', label: 'Konkurrence, alle giver et bud og den tætteste vinder' }
+      ], wildType) +
+      '</select></label>' +
+      '<div data-wild-standard' + (wildType === 'contest' ? ' hidden' : '') + '><div class="field"><span>Deltagere</span>' + m.players.map((p) =>
         '<label class="choice"><input type="checkbox" name="participant" value="' + esc(p.id) + '"' + (info.participants.some((x) => x.id === p.id) ? ' checked' : '') + '> ' + esc(displayName(p)) + '</label>').join('') +
-      '</div>' +
+      '</div></div>' +
+      '<div data-wild-contest' + (wildType === 'contest' ? '' : ' hidden') + '><div class="field"><span>Bud pr. mand. Et tomt felt betyder, at manden ikke deltager.</span>' + m.players.map((p) =>
+        '<label class="field"><span>' + esc(displayName(p)) + '</span><input type="text" name="guess:' + esc(p.id) + '" maxlength="80" placeholder="Fx Jaguars 24-20 Texans" value="' + esc(guessOf(p)) + '"></label>').join('') +
+      '</div></div>' +
       '<div class="form__actions"><button class="button" type="submit">Gem wild bet</button></div>' +
       '</form>';
-    const wildSettle = wild
-      ? '<h3>Afgør wild bet</h3>' +
+    let wildSettle = '';
+    if (wild && wild.type === 'contest') {
+      const settled = wildSettled(wild);
+      const winner = settled ? m.playersById[wild.winnerId] : null;
+      wildSettle = '<h3>Afgør oraklet</h3>' +
+        '<p class="admin__note">' + (settled
+          ? 'Vinder nu: ' + esc(winner ? displayName(winner) : wild.winnerId) + ', huset giver ' + roundsWord(wild.houseRounds) + '. Afgør igen for at ændre.'
+          : 'Konkurrencen er åben.') + '</p>' +
+        (info.participants.length
+          ? '<form data-action="settleContest">' +
+            '<div class="form--row">' +
+            '<label class="field"><span>Slutresultat, til hjælp med forslaget</span><input type="text" name="finalScore" placeholder="Fx Jaguars 24-20 Texans"></label>' +
+            '<button class="button button--small button--quiet" type="button" data-action="suggestWinner">Foreslå vinder</button>' +
+            '</div>' +
+            '<div class="suggest" data-suggestion></div>' +
+            '<label class="field field--inline"><span>Vinder</span><select name="winnerId">' +
+            optionsHtml(info.participants.map((p) => ({ value: p.id, label: displayName(p) })), wild.winnerId || info.participants[0].id) +
+            '</select></label>' +
+            '<div class="field"><span>Runder, huset giver</span>' +
+            '<label class="choice"><input type="radio" name="houseRounds" value="1"' + (wild.houseRounds === 2 ? '' : ' checked') + '> 1 runde, tættest på</label>' +
+            '<label class="choice"><input type="radio" name="houseRounds" value="2"' + (wild.houseRounds === 2 ? ' checked' : '') + '> 2 runder, inden for ét point i alt</label>' +
+            '</div>' +
+            '<div class="form__actions"><button class="button button--small" type="submit">Afgør oraklet</button></div>' +
+            '</form>'
+          : '<p class="admin__note">Ingen bud endnu. Skriv buddene ovenfor og gem wild bettet først.</p>');
+    } else if (wild) {
+      wildSettle = '<h3>Afgør wild bet</h3>' +
         '<p class="admin__note">Udfald nu: ' + wildStateText(wild) + '.</p>' +
         '<form class="form__actions" data-action="settleWildBet">' +
         '<button class="button button--small" type="submit" name="outcome" value="hit">' + COPY.hit + '</button>' +
         '<button class="button button--small button--quiet" type="submit" name="outcome" value="miss">' + COPY.miss + '</button>' +
-        '</form>'
-      : '';
+        '</form>';
+    }
 
     const weekSection = info.week
       ? '<form data-action="updateWeek">' +
@@ -969,12 +1225,21 @@
         '<section class="admin__section"><h2>Bets i uge ' + weekNo + '</h2>' + betsList +
         '<h3>Opret bet</h3>' +
         '<form data-action="createBet">' +
+        '<label class="field"><span>Type</span><select name="type" data-toggle="bettype">' +
+        optionsHtml([
+          { value: 'ab', label: 'To udfald, A eller B' },
+          { value: 'text', label: 'Fritekst, hver mand skriver et svar' }
+        ], 'ab') +
+        '</select></label>' +
         '<label class="field"><span>Kamp</span><select name="gameId">' + optionsHtml(gameOptions, gameOptions[0].value) + '</select></label>' +
         '<label class="field"><span>Titel</span><input type="text" name="title" required placeholder="Fx Jaguars vinder med 10 point eller mere"></label>' +
+        '<div data-ab-fields>' +
         '<label class="field field--inline"><span>Udfald A</span><input type="text" name="optionA" required placeholder="Ja"></label>' +
         '<label class="field field--inline"><span>Udfald B</span><input type="text" name="optionB" required placeholder="Nej"></label>' +
+        '</div>' +
         '<label class="field"><span>Hold</span><select name="team">' + optionsHtml(teamOptions, '') + '</select></label>' +
-        '<p class="admin__note">Nummeret sættes automatisk. Næste er bet ' + (info.bets.length ? Math.max.apply(null, info.bets.map((b) => b.number)) + 1 : 1) + '. Vælg BOTH, hvis bettet gælder både Jaguars og Texans.</p>' +
+        '<label class="field field--inline"><span>Gevinst ved sejr (kr.)</span><input type="number" name="winAmount" min="1" max="1000" required value="' + DEFAULT_WIN + '"></label>' +
+        '<p class="admin__note">Nummeret sættes automatisk. Næste er bet ' + (info.bets.length ? Math.max.apply(null, info.bets.map((b) => b.number)) + 1 : 1) + '. Et nederlag koster altid ' + DEFAULT_LOSS + ' kr. Vælg BOTH, hvis bettet gælder både Jaguars og Texans.</p>' +
         '<div class="form__actions"><button class="button" type="submit">Opret bet</button></div>' +
         '</form>' +
         '</section>' +
@@ -999,6 +1264,127 @@
       '<div class="form__actions"><button class="button" type="submit">Gem øgenavne</button></div>' +
       '</form></section>' +
       '</div>';
+  }
+
+  // Afgørelse af et fritekst-bet: de afgivne svar som hurtigknapper, et felt til
+  // et andet svar, og "Intet rigtigt svar". Enter i feltet rammer "Afgør bet".
+  function textSettleFormHtml(m, b) {
+    const seen = {};
+    const answers = [];
+    (m.picksByBet[b.id] || []).forEach((p) => {
+      const key = normalizeAnswer(p.side);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      answers.push(p.side);
+    });
+    return '<form class="textsettle" data-action="settleTextBet" data-id="' + esc(b.id) + '">' +
+      '<label class="field field--inline"><span>Rigtigt svar</span><input type="text" name="answer" maxlength="80" placeholder="Fx Parker Washington" value="' + esc(b.outcome === 'ANSWER' ? b.answer : '') + '"></label>' +
+      '<button class="button button--small" type="submit" name="useField" value="1">Afgør bet</button>' +
+      (answers.length
+        ? '<span class="admin__note">Afgivne svar:</span>' + answers.map((a) =>
+          '<button class="button button--small button--quiet" type="submit" name="pick" value="' + esc(a) + '">' + esc(a) + '</button>').join('')
+        : '<span class="admin__note">Ingen har svaret endnu.</span>') +
+      '<button class="button button--small button--quiet" type="submit" name="noAnswer" value="1">' + COPY.noAnswer + '</button>' +
+      '</form>';
+  }
+
+  // Viser hjælpen til oraklet: afstand pr. bud og et forslag, som huset selv bekræfter.
+  function renderSuggestion(form) {
+    const m = state.model;
+    const box = form.querySelector('[data-suggestion]');
+    const text = str(form.finalScore && form.finalScore.value);
+    if (!box) return;
+    const s = text ? suggestWinner(m, state.adminWeek, text) : null;
+    if (!s) {
+      box.innerHTML = '<p class="admin__note">Kunne ikke læse resultatet. Skriv fx Jaguars 24-20 Texans.</p>';
+      return;
+    }
+    const rows = s.rows.map((r) => {
+      if (!r.parsed) return '<tr><td>' + esc(displayName(r.player)) + '</td><td>' + esc(r.guess) + '</td><td colspan="3">Kunne ikke læses</td></tr>';
+      return '<tr' + (s.best && r.player.id === s.best.player.id ? ' class="is-best"' : '') + '><td>' + esc(displayName(r.player)) + '</td><td>' + esc(r.guess) + '</td>' +
+        '<td>Jaguars ' + r.parsed.jax + ', Texans ' + r.parsed.hou + '</td><td>' + r.distance + '</td><td>' + (r.winnerRight ? 'Ja' : 'Nej') + '</td></tr>';
+    }).join('');
+    const best = s.best;
+    const proposal = best
+      ? 'Forslag: ' + esc(displayName(best.player)) + ' med afstand ' + best.distance + ', huset giver ' + roundsWord(s.houseRounds) + '.' + (s.tie ? ' Der er lighed helt ned til pointsummen, så huset må vælge.' : '')
+      : 'Ingen bud kunne læses.';
+    box.innerHTML = '<p class="admin__note">Resultatet læst som Jaguars ' + s.actual.jax + ', Texans ' + s.actual.hou + '.</p>' +
+      '<table><thead><tr><th>Mand</th><th>Bud</th><th>Læst som</th><th>Afstand</th><th>Rigtig vinder</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<p class="admin__note"><strong>' + proposal + '</strong> Tjek, og tryk Afgør oraklet.</p>';
+    if (best) {
+      if (form.winnerId) form.winnerId.value = best.player.id;
+      const radio = form.querySelector('input[name="houseRounds"][value="' + s.houseRounds + '"]');
+      if (radio) radio.checked = true;
+    }
+  }
+
+  // Skjuler og viser felter efter valgt type i formularerne.
+  function applyToggle(select) {
+    const form = select.form;
+    if (!form) return;
+    if (select.dataset.toggle === 'bettype') {
+      const isText = select.value === 'text';
+      const box = form.querySelector('[data-ab-fields]');
+      if (box) {
+        box.hidden = isText;
+        box.querySelectorAll('input').forEach((el) => { el.required = !isText; });
+      }
+    } else if (select.dataset.toggle === 'wildtype') {
+      const isContest = select.value === 'contest';
+      const standard = form.querySelector('[data-wild-standard]');
+      const contest = form.querySelector('[data-wild-contest]');
+      if (standard) standard.hidden = isContest;
+      if (contest) contest.hidden = !isContest;
+    }
+  }
+
+  function applyToggles() {
+    app.querySelectorAll('select[data-toggle]').forEach(applyToggle);
+  }
+
+  // Bevarer det, huset er i gang med at skrive i andre formularer, når bogen genindlæses.
+  function formKey(form) {
+    return (form.dataset.action || '') + '|' + (form.dataset.id || '');
+  }
+
+  function fieldKey(form, el) {
+    const checkable = el.type === 'radio' || el.type === 'checkbox';
+    return formKey(form) + '|' + el.name + (checkable ? '|' + el.value : '');
+  }
+
+  function captureForms(except) {
+    const snap = { fields: {}, open: {}, except: except ? formKey(except) : null };
+    app.querySelectorAll('form[data-action]').forEach((form) => {
+      if (form === except) return;
+      form.querySelectorAll('input, select, textarea').forEach((el) => {
+        if (!el.name || el.type === 'password' || el.type === 'hidden') return;
+        snap.fields[fieldKey(form, el)] = (el.type === 'radio' || el.type === 'checkbox') ? el.checked : el.value;
+      });
+    });
+    app.querySelectorAll('details').forEach((d) => {
+      const form = d.querySelector('form[data-action]');
+      if (form && d.open) snap.open[formKey(form)] = true;
+    });
+    return snap;
+  }
+
+  function restoreForms(snap) {
+    if (!snap) return;
+    app.querySelectorAll('form[data-action]').forEach((form) => {
+      if (formKey(form) === snap.except) return;
+      form.querySelectorAll('input, select, textarea').forEach((el) => {
+        if (!el.name || el.type === 'password' || el.type === 'hidden') return;
+        const key = fieldKey(form, el);
+        if (!(key in snap.fields)) return;
+        if (el.type === 'radio' || el.type === 'checkbox') el.checked = !!snap.fields[key];
+        else el.value = snap.fields[key];
+      });
+    });
+    app.querySelectorAll('details').forEach((d) => {
+      const form = d.querySelector('form[data-action]');
+      if (form && snap.open[formKey(form)]) d.open = true;
+    });
+    applyToggles();
   }
 
   function localToIso(value) {
@@ -1064,25 +1450,56 @@
       return { message: 'Kampen er slettet.' };
     },
     async createBet(ctx) {
+      const type = str(ctx.fd.get('type')) === 'text' ? 'text' : 'ab';
+      const winAmount = num(ctx.fd.get('winAmount'), 0);
+      if (winAmount < 1) throw new Error('Gevinst ved sejr skal være mindst 1 kr.');
       await postAction('createBet', {
         weekNo: state.adminWeek,
         gameId: str(ctx.fd.get('gameId')),
         title: str(ctx.fd.get('title')),
-        optionA: str(ctx.fd.get('optionA')),
-        optionB: str(ctx.fd.get('optionB')),
-        team: str(ctx.fd.get('team'))
+        type: type,
+        optionA: type === 'text' ? '' : str(ctx.fd.get('optionA')),
+        optionB: type === 'text' ? '' : str(ctx.fd.get('optionB')),
+        team: str(ctx.fd.get('team')),
+        winAmount: winAmount === DEFAULT_WIN ? '' : winAmount
       });
     },
     async updateBet(ctx) {
-      await postAction('updateBet', {
+      const winAmount = num(ctx.fd.get('winAmount'), 0);
+      if (winAmount < 1) throw new Error('Gevinst ved sejr skal være mindst 1 kr.');
+      const payload = {
         id: ctx.form.dataset.id,
         number: num(ctx.fd.get('number'), 0),
         gameId: str(ctx.fd.get('gameId')),
         title: str(ctx.fd.get('title')),
-        optionA: str(ctx.fd.get('optionA')),
-        optionB: str(ctx.fd.get('optionB')),
-        team: str(ctx.fd.get('team'))
-      });
+        team: str(ctx.fd.get('team')),
+        winAmount: winAmount === DEFAULT_WIN ? '' : winAmount
+      };
+      if (ctx.fd.has('optionA')) payload.optionA = str(ctx.fd.get('optionA'));
+      if (ctx.fd.has('optionB')) payload.optionB = str(ctx.fd.get('optionB'));
+      await postAction('updateBet', payload);
+    },
+    async settleTextBet(ctx) {
+      const s = ctx.submitter;
+      const id = ctx.form.dataset.id;
+      if (s && s.name === 'noAnswer') {
+        await postAction('settleTextBet', { id: id, noAnswer: true });
+        return;
+      }
+      if (s && s.name === 'pick') {
+        await postAction('settleTextBet', { id: id, answer: str(s.value) });
+        return;
+      }
+      const answer = str(ctx.fd.get('answer'));
+      if (!answer) throw new Error('Skriv det rigtige svar, vælg et af de afgivne, eller tryk Intet rigtigt svar.');
+      await postAction('settleTextBet', { id: id, answer: answer });
+    },
+    async settleContest(ctx) {
+      const winnerId = str(ctx.fd.get('winnerId'));
+      const houseRounds = num(ctx.fd.get('houseRounds'), 0);
+      if (!winnerId) throw new Error('Vælg en vinder.');
+      if (houseRounds !== 1 && houseRounds !== 2) throw new Error('Vælg 1 eller 2 runder.');
+      await postAction('settleContest', { weekNo: state.adminWeek, winnerId: winnerId, houseRounds: houseRounds });
     },
     async deleteBet(ctx) {
       await postAction('deleteBet', { id: ctx.id });
@@ -1100,8 +1517,8 @@
       info.bets.forEach((b) => {
         const wanted = [];
         m.players.forEach((p) => {
-          const side = str(ctx.fd.get('pick:' + b.id + ':' + p.id));
-          if (side === 'A' || side === 'B') wanted.push({ playerId: p.id, side: side });
+          const side = str(ctx.fd.get('pick:' + b.id + ':' + p.id)).replace(/\s+/g, ' ');
+          if (b.type === 'text' ? !!side : (side === 'A' || side === 'B')) wanted.push({ playerId: p.id, side: side });
         });
         const current = (m.picksByBet[b.id] || []).map((x) => ({ playerId: x.playerId, side: x.side }));
         const key = (list) => list.slice().sort((x, y) => x.playerId.localeCompare(y.playerId)).map((x) => x.playerId + ':' + x.side).join('|');
@@ -1113,12 +1530,21 @@
       }
     },
     async setWildBet(ctx) {
-      await postAction('setWildBet', {
+      const type = str(ctx.fd.get('type')) === 'contest' ? 'contest' : 'standard';
+      const payload = {
         weekNo: state.adminWeek,
         title: str(ctx.fd.get('title')),
         description: str(ctx.fd.get('description')),
-        participants: ctx.fd.getAll('participant').map(str).filter(Boolean)
-      });
+        type: type
+      };
+      if (type === 'contest') {
+        payload.guesses = state.model.players
+          .map((p) => ({ playerId: p.id, guess: str(ctx.fd.get('guess:' + p.id)).replace(/\s+/g, ' ') }))
+          .filter((g) => g.guess);
+      } else {
+        payload.participants = ctx.fd.getAll('participant').map(str).filter(Boolean);
+      }
+      await postAction('setWildBet', payload);
     },
     async settleWildBet(ctx) {
       const outcome = ctx.submitter && ctx.submitter.value;
@@ -1135,16 +1561,25 @@
   };
 
   // Kører én admin-handling: skriver, viser bekræftelse, genindlæser bogen.
+  // Mens der skrives, er knapperne slået fra og siger "Skriver i bogen ...",
+  // og yderligere klik ignoreres. Andre formularers indhold bevares.
   async function runAdmin(handler, ctx, buttons) {
     if (state.busy) return;
     state.busy = true;
-    buttons.forEach((b) => { b.disabled = true; b.setAttribute('aria-busy', 'true'); });
+    buttons.forEach((b) => {
+      b.disabled = true;
+      b.setAttribute('aria-busy', 'true');
+      if (!b.dataset.label) b.dataset.label = b.textContent;
+      b.textContent = COPY.writing;
+    });
+    const snapshot = captureForms(ctx.form || null);
     try {
       const result = await handler(ctx);
       const reload = !(result && result.reload === false);
       toast((result && result.message) || COPY.saved);
       if (reload) await load();
       render();
+      restoreForms(snapshot);
     } catch (err) {
       if (err && (err.status === 401 || err.status === 403)) {
         sessionStorage.removeItem(TOKEN_KEY);
@@ -1152,7 +1587,11 @@
         render();
       } else {
         toast(err && err.message ? err.message : 'Skrivningen mislykkedes. Prøv igen.', true);
-        buttons.forEach((b) => { b.disabled = false; b.removeAttribute('aria-busy'); });
+        buttons.forEach((b) => {
+          b.disabled = false;
+          b.removeAttribute('aria-busy');
+          if (b.dataset.label) b.textContent = b.dataset.label;
+        });
       }
     } finally {
       state.busy = false;
@@ -1181,9 +1620,12 @@
 
   function onChange(event) {
     const el = event.target;
-    if (el && el.dataset && el.dataset.action === 'selectWeek') {
+    if (!el || !el.dataset) return;
+    if (el.dataset.action === 'selectWeek') {
       state.adminWeek = num(el.value, state.adminWeek);
       render();
+    } else if (el.dataset.toggle) {
+      applyToggle(el);
     }
   }
 
@@ -1198,6 +1640,9 @@
       boot();
     } else if (el.dataset.action === 'deleteBet' || el.dataset.action === 'deleteGame') {
       onDelete(el);
+    } else if (el.dataset.action === 'suggestWinner') {
+      const form = el.closest('form');
+      if (form) renderSuggestion(form);
     }
   }
 
@@ -1342,6 +1787,7 @@
     }
     app.innerHTML = html;
     document.title = title;
+    applyToggles();
 
     if (route.name === 'uger' && route.param) {
       const target = document.getElementById('uge-' + route.param);
