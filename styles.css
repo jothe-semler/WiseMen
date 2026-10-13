@@ -1294,3 +1294,10 @@ img, svg { max-width: 100%; display: block; }
 }
 .suggest th { font-weight: 600; color: var(--ink-2); }
 .suggest tr.is-best td { color: var(--gold); }
+
+/* Finalens wild bet: Wembley-buen i guld og en guldkant på kortet. */
+.wild--final {
+  border-color: color-mix(in oklab, var(--gold) 60%, var(--rule));
+}
+.wild--final .wild__posts { color: var(--gold); }
+.wild--final.wild--decided { border-color: var(--gold); }

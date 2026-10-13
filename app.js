@@ -726,9 +726,26 @@
       '</svg>';
   }
 
+  // Finalens ikon: Wembley-buen over målstængerne. Under buen afgøres det hele.
+  function wembleySvg() {
+    return '<svg class="wild__posts wild__posts--final" viewBox="0 0 80 100" aria-hidden="true" focusable="false">' +
+      '<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M5 84 C 8 18, 72 18, 75 84" stroke-width="5"/>' +
+      '<path d="M14 84 C 17 38, 63 38, 66 84" stroke-width="2" opacity="0.55"/>' +
+      '<line x1="40" y1="97" x2="40" y2="70" stroke-width="4"/>' +
+      '<line x1="24" y1="70" x2="56" y2="70" stroke-width="4"/>' +
+      '<line x1="24" y1="70" x2="24" y2="46" stroke-width="4"/>' +
+      '<line x1="56" y1="70" x2="56" y2="46" stroke-width="4"/>' +
+      '</g>' +
+      '<circle cx="40" cy="30" r="3.2" fill="currentColor"/>' +
+      '</svg>';
+  }
+
   function wildHtml(m, info) {
     const wild = info.wild;
     if (!wild) return '';
+    const icon = info.isFinal ? wembleySvg() : goalpostsSvg();
+    const finalClass = info.isFinal ? ' wild--final' : '';
     const head = '<div class="wild__head"><h4 class="wild__title">' + esc(wild.title) + '</h4><span class="wild__state">' + wildStateText(wild) + '</span></div>' +
       (wild.description ? '<p class="wild__desc">' + esc(wild.description) + '</p>' : '');
 
@@ -748,8 +765,8 @@
       const verdict = settled
         ? '<p class="wild__verdict">Vinder: ' + esc(winner ? displayName(winner) : wild.winnerId) + '. Huset giver ' + roundsWord(wild.houseRounds) + '.</p>'
         : '<p class="wild__people"><span>Den, der kommer tættest på, vinder en runde. Inden for ét point i alt giver huset to. Ingen kan tabe.</span></p>';
-      return '<article class="wild wild--contest' + (settled ? ' wild--decided' : ' wild--open') + '">' +
-        goalpostsSvg() + head + list + verdict + '</article>';
+      return '<article class="wild wild--contest' + (settled ? ' wild--decided' : ' wild--open') + finalClass + '">' +
+        icon + head + list + verdict + '</article>';
     }
 
     const modifier = wild.outcome === 'hit' ? 'wild--hit' : (wild.outcome === 'miss' ? 'wild--miss' : 'wild--open');
@@ -757,8 +774,8 @@
     const people = names.length
       ? '<span>Deltagere:</span> ' + esc(names.join(', ')) + '.'
       : '<span>Ingen deltager.</span>';
-    return '<article class="wild ' + modifier + '">' +
-      goalpostsSvg() + head +
+    return '<article class="wild ' + modifier + finalClass + '">' +
+      icon + head +
       '<p class="wild__people">' + people + '</p>' +
       '</article>';
   }
